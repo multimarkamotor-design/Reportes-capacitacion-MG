@@ -2,13 +2,11 @@ import streamlit as st
 import pandas as pd
 import io
 
-# Configuración de la página
 st.set_page_config(page_title="Generador de Reportes de Capacitación", layout="wide")
 
 st.title("📊 Generador de Reportes de Capacitación")
 st.markdown("Sube los archivos requeridos para procesar la asistencia y generar los formatos consolidados.")
 
-# Sección de carga de archivos
 col1, col2 = st.columns(2)
 with col1:
     st.subheader("1. Reporte de Teams")
@@ -20,127 +18,106 @@ with col2:
 
 if file_teams and file_maestra:
     try:
-        # Lectura de datos
-        if file_teams.name.endswith('csv'):
-            df_teams = pd.read_csv(file_teams)
-        else:
-            df_teams = pd.read_excel(file_teams)
-            
-        if file_maestra.name.endswith('csv'):
-            df_maestra = pd.read_csv(file_maestra)
-        else:
-            df_maestra = pd.read_excel(file_maestra)
+        # Extraer nombres de hojas si son archivos Excel
+        xls_teams = pd.ExcelFile(file_teams) if file_teams.name.endswith('xlsx') else None
+        xls_maestra = pd.ExcelFile(file_maestra) if file_maestra.name.endswith('xlsx') else None
 
-        st.success("Archivos cargados correctamente. Procesando datos...")
-
-        # ---------------------------------------------------------
-        # LÓGICA DE PROCESAMIENTO
-        # ---------------------------------------------------------
-        
-        # 1. Limpieza de nombres de columnas (para evitar errores por espacios)
-        df_teams.columns = df_teams.columns.str.strip().str.lower()
-        df_maestra.columns = df_maestra.columns.str.strip().str.lower()
-
-        # Asumimos que las columnas clave se llaman así (puedes ajustarlas según tus archivos reales)
-        col_correo_teams = 'correo electrónico' if 'correo electrónico' in df_teams.columns else df_teams.columns[1]
-        col_correo_maestra = 'correo' if 'correo' in df_maestra.columns else df_maestra.columns[0]
-        
-        # 2. Cruce de bases de datos usando el correo electrónico
-        df_cruce = pd.merge(
-            df_teams, 
-            df_maestra, 
-            left_on=col_correo_teams, 
-            right_on=col_correo_maestra, 
-            how='inner'
-        )
-
-        # 3. Tratamiento de horas (Conversión de duración de Teams a horas decimales)
-        # Asumiendo que Teams entrega "1h 30m" o minutos puros. 
-        # Aquí simplificamos asignando un valor numérico a una columna 'horas_calculadas'
-        # NOTA: Debes ajustar el parsing de tiempo según el formato exacto de tu Teams
-        if 'duración' in df_cruce.columns:
-            # Ejemplo simplificado: si viene en formato texto o numérico
-            df_cruce['horas_calculadas'] = pd.to_numeric(df_cruce['duración'], errors='coerce').fillna(1.0)
-        else:
-            df_cruce['horas_calculadas'] = 1.0 # Valor por defecto por sesión
-
-        # ---------------------------------------------------------
-        # GENERACIÓN DEL FORMATO: Horas de formacion.xlsx
-        # ---------------------------------------------------------
-        
-        # Estructura base del reporte matricial
-        cargos = ['Asistencial', 'Asesores', 'Coordinadores', 'Gerente']
-        matriz = pd.DataFrame({
-            'Formación empleados': cargos,
-            'Hombres_Alcanzados': [0]*4,
-            'Hombres_Horas': [0.0]*4,
-            'Mujeres_Alcanzadas': [0]*4,
-            'Mujeres_Horas': [0.0]*4
-        }).set_index('Formación empleados')
-
-        # Llenado de la matriz con los datos cruzados
-        for index, row in df_cruce.iterrows():
-            cargo = str(row.get('cargo', '')).capitalize()
-            sexo = str(row.get('sexo', '')).capitalize()
-            horas = row['horas_calculadas']
-            
-            # Ajuste al nombre exacto del cargo para que coincida con la matriz
-            if 'Asesor' in cargo: cargo = 'Asesores'
-            
-            if cargo in matriz.index:
-                if sexo == 'Hombre':
-                    matriz.loc[cargo, 'Hombres_Alcanzados'] += 1
-                    matriz.loc[cargo, 'Hombres_Horas'] += horas
-                elif sexo == 'Mujer':
-                    matriz.loc[cargo, 'Mujeres_Alcanzadas'] += 1
-                    matriz.loc[cargo, 'Mujeres_Horas'] += horas
-
-        # Cálculos de totales
-        matriz['Total empleados alcanzados'] = matriz['Hombres_Alcanzados'] + matriz['Mujeres_Alcanzadas']
-        matriz['Total horas de formación'] = matriz['Hombres_Horas'] + matriz['Mujeres_Horas']
-
-        # ---------------------------------------------------------
-        # DESCARGA DE ARCHIVOS
-        # ---------------------------------------------------------
         st.divider()
-        st.header("📥 Descarga de Reportes")
+        st.subheader("⚙️ Configuración de los archivos")
+        st.markdown("Selecciona la hoja y en qué fila están los títulos (Ej: Nombre, Correo, Cargo) para que el sistema encuentre los datos.")
         
-        col_desc1, col_desc2 = st.columns(2)
-        
-        # 1. Reporte Consolidado (Matriz)
-        with col_desc1:
-            st.subheader("Formato Oficial (Matriz)")
-            st.dataframe(matriz)
+        col_opt1, col_opt2 = st.columns(2)
+        with col_opt1:
+            sheet_teams = st.selectbox("Hoja de Teams:", xls_teams.sheet_names) if xls_teams else 0
+            # Por defecto las descargas directas de Teams están en la fila 1, o en la 10 si tienen resumen
+            fila_teams = st.number_input("Fila de títulos en Teams:", min_value=1, value=1)
             
-            buffer_matriz = io.BytesIO()
-            with pd.ExcelWriter(buffer_matriz, engine='xlsxwriter') as writer:
-                matriz.to_excel(writer, sheet_name='Matriz Formación')
-            
-            st.download_button(
-                label="Descargar Formato Oficial en Excel",
-                data=buffer_matriz.getvalue(),
-                file_name="Horas_de_formacion_Calculado.xlsx",
-                mime="application/vnd.ms-excel"
-            )
+        with col_opt2:
+            sheet_maestra = st.selectbox("Hoja Maestra:", xls_maestra.sheet_names) if xls_maestra else 0
+            # En tus bases maestras los títulos están en la fila 4
+            fila_maestra = st.number_input("Fila de títulos en Maestra (Tus bases usan la 4):", min_value=1, value=4)
 
-        # 2. Reporte Detallado
-        with col_desc2:
-            st.subheader("Base de Datos Detallada")
-            # Seleccionamos las columnas de interés para el reporte detallado
-            cols_detalladas = [c for c in df_cruce.columns if c not in [col_correo_teams]]
-            df_detallado = df_cruce[cols_detalladas]
-            st.dataframe(df_detallado.head())
+        if st.button("🚀 Procesar y Generar Reportes"):
+            # Leer datos saltando las filas vacías de arriba (skiprows)
+            if file_teams.name.endswith('csv'):
+                df_teams = pd.read_csv(file_teams, skiprows=fila_teams-1)
+            else:
+                df_teams = pd.read_excel(file_teams, sheet_name=sheet_teams, skiprows=fila_teams-1)
+                
+            if file_maestra.name.endswith('csv'):
+                df_maestra = pd.read_csv(file_maestra, skiprows=fila_maestra-1)
+            else:
+                df_maestra = pd.read_excel(file_maestra, sheet_name=sheet_maestra, skiprows=fila_maestra-1)
+
+            # Estandarizar nombres de columnas para que el sistema no se confunda
+            df_teams.columns = df_teams.columns.astype(str).str.strip().str.lower()
+            df_maestra.columns = df_maestra.columns.astype(str).str.strip().str.lower()
+
+            # Buscar inteligentemente la columna de correo
+            col_correo_teams = next((col for col in df_teams.columns if 'correo' in col), None)
+            col_correo_maestra = next((col for col in df_maestra.columns if 'correo' in col), None)
             
-            buffer_detallado = io.BytesIO()
-            with pd.ExcelWriter(buffer_detallado, engine='xlsxwriter') as writer:
-                df_detallado.to_excel(writer, index=False, sheet_name='Detalle_Vitrina_Asesor')
-            
-            st.download_button(
-                label="Descargar Detalle por Vitrina y Asesor",
-                data=buffer_detallado.getvalue(),
-                file_name="Detalle_Capacitacion.xlsx",
-                mime="application/vnd.ms-excel"
-            )
+            if not col_correo_teams or not col_correo_maestra:
+                st.error("❌ No se encontró la columna de correo en uno de los archivos. Asegúrate de haber seleccionado la hoja y la fila correcta.")
+            else:
+                # Cruce maestro de bases de datos
+                df_cruce = pd.merge(df_teams, df_maestra, left_on=col_correo_teams, right_on=col_correo_maestra, how='inner')
+
+                # Calcular horas asumiendo 1 hora por sesión de forma predeterminada
+                df_cruce['horas_calculadas'] = 1.0 
+
+                # Construir la estructura de la Matriz Oficial
+                cargos = ['Asistencial', 'Asesores', 'Coordinadores', 'Gerente']
+                matriz = pd.DataFrame({
+                    'Formación empleados': cargos,
+                    'Hombres_Alcanzados': [0]*4,
+                    'Hombres_Horas': [0.0]*4,
+                    'Mujeres_Alcanzadas': [0]*4,
+                    'Mujeres_Horas': [0.0]*4
+                }).set_index('Formación empleados')
+
+                # Llenar la matriz
+                for index, row in df_cruce.iterrows():
+                    cargo = str(row.get('cargo', '')).capitalize()
+                    # Si no hay columna de sexo, asume Hombre para no romper el cálculo
+                    sexo = str(row.get('sexo', 'Hombre')).capitalize() 
+                    horas = row['horas_calculadas']
+                    
+                    if 'Asesor' in cargo: cargo = 'Asesores'
+                    
+                    if cargo in matriz.index:
+                        if sexo == 'Hombre':
+                            matriz.loc[cargo, 'Hombres_Alcanzados'] += 1
+                            matriz.loc[cargo, 'Hombres_Horas'] += horas
+                        elif sexo == 'Mujer':
+                            matriz.loc[cargo, 'Mujeres_Alcanzadas'] += 1
+                            matriz.loc[cargo, 'Mujeres_Horas'] += horas
+
+                # Sumatorias finales
+                matriz['Total empleados alcanzados'] = matriz['Hombres_Alcanzados'] + matriz['Mujeres_Alcanzadas']
+                matriz['Total horas de formación'] = matriz['Hombres_Horas'] + matriz['Mujeres_Horas']
+
+                st.success("✅ ¡Reportes cruzados y generados con éxito!")
+                
+                # Descargas
+                col_desc1, col_desc2 = st.columns(2)
+                with col_desc1:
+                    st.subheader("Formato Oficial (Matriz)")
+                    st.dataframe(matriz)
+                    buffer_matriz = io.BytesIO()
+                    with pd.ExcelWriter(buffer_matriz, engine='xlsxwriter') as writer:
+                        matriz.to_excel(writer, sheet_name='Matriz Formación')
+                    st.download_button("Descargar Matriz Excel", data=buffer_matriz.getvalue(), file_name="Horas_de_formacion_Calculado.xlsx")
+
+                with col_desc2:
+                    st.subheader("Base de Datos Detallada")
+                    cols_detalladas = [c for c in df_cruce.columns if c != col_correo_teams]
+                    df_detallado = df_cruce[cols_detalladas]
+                    st.dataframe(df_detallado.head())
+                    buffer_detallado = io.BytesIO()
+                    with pd.ExcelWriter(buffer_detallado, engine='xlsxwriter') as writer:
+                        df_detallado.to_excel(writer, index=False, sheet_name='Detalle')
+                    st.download_button("Descargar Detalle Excel", data=buffer_detallado.getvalue(), file_name="Detalle_Capacitacion.xlsx")
 
     except Exception as e:
-        st.error(f"Ocurrió un error al procesar los archivos. Verifica que los nombres de las columnas sean correctos. Detalle del error: {e}")
+        st.error(f"Ocurrió un error inesperado al cruzar los datos: {e}")
